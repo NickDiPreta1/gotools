@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 )
 
@@ -47,6 +48,7 @@ func main() {
 
 	var success, failed int
 	var totalLatency time.Duration
+	var latencyList []time.Duration
 
 	for _, r := range results {
 		if r.Error != nil || r.Status < 200 || r.Status >= 300 {
@@ -54,16 +56,45 @@ func main() {
 		} else {
 			success++
 		}
+		latencyList = append(latencyList, r.Latency)
 		totalLatency += r.Latency
 	}
 
 	rps := float64(*requests) / duration.Seconds()
-	avgLatency := totalLatency / time.Duration(len(results))
 
 	fmt.Printf("Requests:    %d\n", *requests)
 	fmt.Printf("Success:     %d\n", success)
 	fmt.Printf("Failed:      %d\n", failed)
 	fmt.Printf("Duration:    %s\n", duration.Round(time.Millisecond))
 	fmt.Printf("RPS:         %.2f\n", rps)
-	fmt.Printf("Avg Latency: %s\n", avgLatency.Round(time.Millisecond))
+
+	if len(latencyList) > 0 {
+		slices.Sort(latencyList)
+		avgLatency := totalLatency / time.Duration(len(latencyList))
+
+		p50Idx := len(latencyList) * 50 / 100
+		p95Idx := len(latencyList) * 95 / 100
+		p99Idx := len(latencyList) * 99 / 100
+
+		// Clamp to valid range
+		if p50Idx >= len(latencyList) {
+			p50Idx = len(latencyList) - 1
+		}
+		if p95Idx >= len(latencyList) {
+			p95Idx = len(latencyList) - 1
+		}
+		if p99Idx >= len(latencyList) {
+			p99Idx = len(latencyList) - 1
+		}
+
+		fmt.Printf("Latency:\n")
+		fmt.Printf("  Min:         %s\n", latencyList[0].Round(time.Millisecond))
+		fmt.Printf("  Avg:         %s\n", avgLatency.Round(time.Millisecond))
+		fmt.Printf("  P50:         %s\n", latencyList[p50Idx].Round(time.Millisecond))
+		fmt.Printf("  P95:         %s\n", latencyList[p95Idx].Round(time.Millisecond))
+		fmt.Printf("  P99:         %s\n", latencyList[p99Idx].Round(time.Millisecond))
+		fmt.Printf("  Max:         %s\n", latencyList[len(latencyList)-1].Round(time.Millisecond))
+	} else {
+		fmt.Printf("Latency:     no successful requests\n")
+	}
 }

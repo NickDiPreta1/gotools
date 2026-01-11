@@ -2,11 +2,12 @@
 
 ## Overview
 
-Three CLI tools with shared infrastructure:
+Four projects with shared infrastructure:
 
 1. **blitz** — HTTP load tester
 2. **streamrip** — Concurrent video/stream downloader
 3. **netscan** — Network scanner and service discovery
+4. **audiotrack** — Audiobook library and progress tracker
 
 Each tool builds on patterns from the previous, sharing common code in `gokit/`.
 
@@ -20,6 +21,7 @@ Each tool builds on patterns from the previous, sharing common code in `gokit/`.
 - `github.com/NickDiPreta/blitz`
 - `github.com/NickDiPreta/streamrip`
 - `github.com/NickDiPreta/netscan`
+- `github.com/NickDiPreta/audiotrack`
 - `github.com/NickDiPreta/gokit`
 
 ---
@@ -983,6 +985,293 @@ HOST            PORT   STATE   SERVICE   VERSION
 
 ---
 
+## Phase 4 — audiotrack: Audiobook Library & Progress Tracker
+
+A personal audiobook management system that stores your audiobook files and remembers exactly where you left off.
+
+### Stage 4.1: Core Data Model and Storage
+
+**Goal:** Define the data structures and storage backend for audiobooks and progress.
+
+#### Data Model
+
+```go
+type Audiobook struct {
+    ID          string    `json:"id"`
+    Title       string    `json:"title"`
+    Author      string    `json:"author"`
+    Narrator    string    `json:"narrator"`
+    Duration    time.Duration `json:"duration"`
+    FilePath    string    `json:"file_path"`
+    CoverPath   string    `json:"cover_path"`
+    AddedAt     time.Time `json:"added_at"`
+    Chapters    []Chapter `json:"chapters"`
+}
+
+type Chapter struct {
+    Title    string        `json:"title"`
+    StartPos time.Duration `json:"start_pos"`
+}
+
+type Progress struct {
+    BookID      string        `json:"book_id"`
+    Position    time.Duration `json:"position"`
+    UpdatedAt   time.Time     `json:"updated_at"`
+    Completed   bool          `json:"completed"`
+    PlaybackSpeed float64     `json:"playback_speed"`
+}
+```
+
+#### Storage Options
+
+1. **SQLite** — Simple, file-based, good for single-user
+2. **BoltDB** — Pure Go, embedded key-value store
+3. **JSON files** — Simplest, human-readable
+
+#### Features
+- Initialize library database
+- CRUD operations for audiobooks
+- Store/retrieve progress for each book
+- Metadata extraction from audio files
+
+#### Concepts
+- Database design patterns
+- `database/sql` or embedded databases
+- Audio metadata parsing (ID3 tags, etc.)
+
+---
+
+### Stage 4.2: File Upload and Library Management
+
+**Goal:** `audiotrack add ~/audiobooks/book.mp3` or `audiotrack import ~/audiobooks/`
+
+#### Features
+- Add individual audiobook files
+- Bulk import from directory
+- Supported formats: MP3, M4A, M4B, FLAC, OGG
+- Automatic metadata extraction (title, author, duration, cover art)
+- Organize files into library structure (optional)
+
+#### CLI Commands
+
+```bash
+# Add a single audiobook
+audiotrack add book.mp3
+
+# Import all audiobooks from a directory
+audiotrack import ~/Downloads/audiobooks/
+
+# List all audiobooks in library
+audiotrack list
+
+# Show details for a book
+audiotrack info <book-id>
+
+# Remove from library
+audiotrack remove <book-id>
+```
+
+#### Metadata Extraction
+
+```go
+func extractMetadata(filePath string) (*Audiobook, error) {
+    f, err := os.Open(filePath)
+    if err != nil {
+        return nil, err
+    }
+    defer f.Close()
+
+    // Use github.com/dhowden/tag or similar
+    m, err := tag.ReadFrom(f)
+    if err != nil {
+        return nil, err
+    }
+
+    return &Audiobook{
+        Title:  m.Title(),
+        Author: m.Artist(),
+        // ...
+    }, nil
+}
+```
+
+#### Concepts
+- File handling and organization
+- Audio metadata libraries (`github.com/dhowden/tag`)
+- Directory traversal
+- FFprobe integration for duration/chapters
+
+---
+
+### Stage 4.3: Progress Tracking
+
+**Goal:** Save and restore listening position for each audiobook.
+
+#### Features
+- Record current position: `audiotrack save-progress <book-id> 1h23m45s`
+- Get current position: `audiotrack where <book-id>`
+- Mark as complete: `audiotrack complete <book-id>`
+- Resume info: `audiotrack resume` (shows where you left off)
+
+#### CLI Commands
+
+```bash
+# Save your current position
+audiotrack save-progress "atomic-habits" 2h15m30s
+
+# Check where you are in a book
+audiotrack where "atomic-habits"
+# Output: Atomic Habits — 2h15m30s / 5h30m00s (41% complete)
+
+# See all in-progress books
+audiotrack resume
+# Output:
+# Currently listening:
+# 1. Atomic Habits — 2h15m30s / 5h30m00s (41%)
+# 2. The Pragmatic Programmer — 45m00s / 8h15m00s (9%)
+
+# Mark as finished
+audiotrack complete "atomic-habits"
+```
+
+#### Progress Storage
+
+```go
+type ProgressStore interface {
+    SaveProgress(bookID string, position time.Duration) error
+    GetProgress(bookID string) (*Progress, error)
+    ListInProgress() ([]Progress, error)
+    MarkComplete(bookID string) error
+}
+```
+
+#### Concepts
+- State persistence
+- Time duration parsing and formatting
+- Progress calculation and display
+
+---
+
+### Stage 4.4: Web Interface (Optional)
+
+**Goal:** Browser-based UI for managing library and tracking progress.
+
+#### Features
+- View library with cover art
+- Search and filter audiobooks
+- Update progress via web form
+- Mobile-friendly responsive design
+- Embedded web server: `audiotrack serve`
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────┐
+│            Web Browser                   │
+└────────────────────┬────────────────────┘
+                     │ HTTP
+┌────────────────────▼────────────────────┐
+│         Go HTTP Server                   │
+│  ┌─────────────┐  ┌─────────────────┐   │
+│  │  REST API   │  │  Static Files   │   │
+│  │  /api/books │  │  (HTML/CSS/JS)  │   │
+│  └──────┬──────┘  └─────────────────┘   │
+│         │                                │
+│  ┌──────▼──────┐                        │
+│  │   Storage   │                        │
+│  └─────────────┘                        │
+└─────────────────────────────────────────┘
+```
+
+#### API Endpoints
+
+```
+GET    /api/books              — List all audiobooks
+GET    /api/books/:id          — Get audiobook details
+POST   /api/books              — Add new audiobook
+DELETE /api/books/:id          — Remove audiobook
+GET    /api/books/:id/progress — Get progress
+PUT    /api/books/:id/progress — Update progress
+GET    /api/resume             — List in-progress books
+```
+
+#### Concepts
+- `net/http` server
+- REST API design
+- HTML templates or embedded SPA
+- File serving
+
+---
+
+### Stage 4.5: Sync and Backup
+
+**Goal:** Sync progress across devices.
+
+#### Features
+- Export library/progress to JSON: `audiotrack export backup.json`
+- Import from backup: `audiotrack import-data backup.json`
+- Optional cloud sync (S3, Google Drive, Dropbox)
+- Conflict resolution for progress updates
+
+#### Sync Strategies
+
+1. **Manual export/import** — Simple JSON backup
+2. **File-based sync** — Use existing cloud storage (Dropbox, iCloud)
+3. **Server sync** — Self-hosted sync server (stretch goal)
+
+#### Concepts
+- JSON serialization
+- Cloud storage APIs
+- Conflict resolution strategies
+
+---
+
+### Stage 4.6: Audio Player Integration (Stretch Goal)
+
+**Goal:** Optionally play audiobooks directly and auto-save progress.
+
+#### Features
+- Built-in CLI player: `audiotrack play <book-id>`
+- Auto-save progress every 30 seconds
+- Keyboard controls (pause, skip, speed)
+- Chapter navigation
+
+#### Player Options
+
+1. **Shell out to mpv/VLC** — Simplest approach
+2. **Use oto/beep** — Pure Go audio playback
+3. **Web-based player** — HTML5 audio in web UI
+
+```go
+// Using external player
+func playWithMPV(filePath string, startPos time.Duration) error {
+    cmd := exec.Command("mpv",
+        "--start="+formatDuration(startPos),
+        filePath,
+    )
+    return cmd.Run()
+}
+```
+
+#### Concepts
+- Audio playback libraries
+- External process integration
+- Real-time progress tracking
+
+---
+
+### Stage 4.7: Polish and Features
+
+#### Tasks
+- Comprehensive `--help` output
+- README with usage examples
+- Statistics (listening time this week/month, books completed)
+- Search by title/author
+- Tags and collections
+- Reading lists / "want to listen"
+
+---
+
 ## Timeline
 
 | Phase | Duration | Cumulative |
@@ -1014,11 +1303,15 @@ HOST            PORT   STATE   SERVICE   VERSION
 | Generics | gokit/pool |
 | sync.Mutex/atomic | stats |
 | net package | netscan |
-| http package | blitz, streamrip |
+| http package | blitz, streamrip, audiotrack |
 | crypto/aes | streamrip |
 | Text parsing | streamrip |
-| File I/O | streamrip |
-| os/exec | streamrip (FFmpeg) |
+| File I/O | streamrip, audiotrack |
+| os/exec | streamrip (FFmpeg), audiotrack (mpv) |
+| database/sql | audiotrack |
+| HTML templates | audiotrack |
+| REST API design | audiotrack |
+| Audio metadata | audiotrack |
 
 ---
 
@@ -1047,6 +1340,15 @@ netscan
 ├── Reuses output formatting
 ├── Adds: net package (raw TCP)
 └── Adds: protocol detection
+        │
+        ▼
+audiotrack
+├── Reuses HTTP server patterns
+├── Reuses output formatting
+├── Adds: database/storage layer
+├── Adds: REST API design
+├── Adds: audio metadata parsing
+└── Adds: web UI with templates
 ```
 
 ---
@@ -1058,4 +1360,8 @@ When tools are stable:
 1. Publish gokit first, tag v0.1.0
 2. Update each tool's go.mod to require published gokit
 3. Create separate repos for each tool
-4. Users install via: `go install github.com/NickDiPreta/blitz@latest`
+4. Users install via:
+   - `go install github.com/NickDiPreta/blitz@latest`
+   - `go install github.com/NickDiPreta/streamrip@latest`
+   - `go install github.com/NickDiPreta/netscan@latest`
+   - `go install github.com/NickDiPreta/audiotrack@latest`

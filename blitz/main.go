@@ -36,11 +36,19 @@ func main() {
 	}()
 
 	var results []Result
+	var errs int
 
-	for i := 0; i < *requests; i++ {
+	for i := 1; i <= *requests; i++ {
 		res := <-resultsChan
+		if res.Error != nil {
+			errs++
+		}
 		results = append(results, res)
+		duration := time.Since(start)
+		rps := float64(i) / duration.Seconds()
+		fmt.Printf("Running: %d/%d | %.2f req/s | Errors: %d\r", i, *requests, rps, errs)
 	}
+	fmt.Printf("\rRunning: %d/%d | %.2f req/s | Errors: %d\n", *requests, float64(*requests)/time.Since(start).Seconds(), errs)
 
 	close(resultsChan)
 

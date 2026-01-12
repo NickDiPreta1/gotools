@@ -38,6 +38,559 @@ From previous work:
 
 ## Phase 0 — Project Setup & CLI Foundation
 
+### Overview
+
+Phase 0 establishes the foundation for all four tools. This phase focuses on creating a well-organized workspace, implementing reusable shared libraries, and ensuring the CLI infrastructure is solid before building any tool-specific features.
+
+---
+
+### Stage 0.1: Go Workspace Setup
+
+**Goal:** Initialize the monorepo structure with Go workspaces.
+
+#### Tasks
+
+1. **Create directory structure**
+   ```bash
+   mkdir -p gokit/{cli,stats,pool,netutil}
+   mkdir -p blitz streamrip netscan audiotrack
+   ```
+
+2. **Initialize Go modules**
+   ```bash
+   # Shared library
+   cd gokit && go mod init github.com/NickDiPreta/gokit
+
+   # Each tool as separate module
+   cd ../blitz && go mod init github.com/NickDiPreta/blitz
+   cd ../streamrip && go mod init github.com/NickDiPreta/streamrip
+   cd ../netscan && go mod init github.com/NickDiPreta/netscan
+   cd ../audiotrack && go mod init github.com/NickDiPreta/audiotrack
+   ```
+
+3. **Create Go workspace file**
+   ```bash
+   cd .. # back to gotools root
+   go work init
+   go work use ./gokit ./blitz ./streamrip ./netscan ./audiotrack
+   ```
+
+4. **Verify workspace**
+   ```bash
+   go work sync
+   cat go.work  # Should list all modules
+   ```
+
+#### Deliverables
+- `go.work` file at repository root
+- `go.mod` file in each module directory
+- All modules recognized by `go work sync`
+
+---
+
+### Stage 0.2: CLI Output Package (gokit/cli/output.go)
+
+**Goal:** Create reusable colored output and table formatting utilities.
+
+#### Tasks
+
+1. **Define color constants and helpers**
+   ```go
+   // ANSI color codes
+   const (
+       Reset   = "\033[0m"
+       Red     = "\033[31m"
+       Green   = "\033[32m"
+       Yellow  = "\033[33m"
+       Blue    = "\033[34m"
+       Magenta = "\033[35m"
+       Cyan    = "\033[36m"
+       Bold    = "\033[1m"
+       Dim     = "\033[2m"
+   )
+
+   func Colorize(color, text string) string
+   func Success(text string) string  // Green
+   func Error(text string) string    // Red
+   func Warning(text string) string  // Yellow
+   func Info(text string) string     // Cyan
+   ```
+
+2. **Implement table formatter**
+   ```go
+   type Table struct {
+       headers []string
+       rows    [][]string
+       writer  io.Writer
+   }
+
+   func NewTable(headers ...string) *Table
+   func (t *Table) AddRow(values ...string)
+   func (t *Table) Render()
+   func (t *Table) SetWriter(w io.Writer)
+   ```
+   - Auto-calculate column widths
+   - Support alignment (left, right, center)
+   - Handle long strings (truncate or wrap)
+
+3. **Implement JSON output mode**
+   ```go
+   type OutputFormat int
+   const (
+       FormatTable OutputFormat = iota
+       FormatJSON
+       FormatCSV
+   )
+
+   func SetOutputFormat(format OutputFormat)
+   func Print(v interface{}) error  // Auto-formats based on current mode
+   ```
+
+4. **Add terminal detection**
+   ```go
+   func IsTerminal() bool           // Check if stdout is a TTY
+   func TerminalWidth() int         // Get terminal width for formatting
+   func DisableColors()             // For non-TTY or --no-color flag
+   ```
+
+#### Tests to Write
+- Color output with/without TTY
+- Table rendering with various column widths
+- JSON output formatting
+- Terminal width detection
+
+#### Deliverables
+- `gokit/cli/output.go` with color, table, and JSON formatting
+- `gokit/cli/output_test.go` with unit tests
+
+---
+
+### Stage 0.3: Progress Display Package (gokit/cli/progress.go)
+
+**Goal:** Create live-updating progress bars and spinners.
+
+#### Tasks
+
+1. **Implement progress bar**
+   ```go
+   type ProgressBar struct {
+       total     int64
+       current   int64
+       width     int
+       startTime time.Time
+       mu        sync.Mutex
+   }
+
+   func NewProgressBar(total int64) *ProgressBar
+   func (p *ProgressBar) Increment(n int64)
+   func (p *ProgressBar) Set(n int64)
+   func (p *ProgressBar) Render() string
+   func (p *ProgressBar) Done()
+   ```
+   - Display format: `[=====>                    ] 30% | 150/500 | ETA: 45s`
+   - Calculate ETA from elapsed time and progress
+   - Support custom width
+
+2. **Implement spinner for indeterminate progress**
+   ```go
+   type Spinner struct {
+       frames  []string
+       current int
+       message string
+       done    chan struct{}
+   }
+
+   func NewSpinner(message string) *Spinner
+   func (s *Spinner) Start()
+   func (s *Spinner) Stop()
+   func (s *Spinner) SetMessage(msg string)
+   ```
+   - Default frames: `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` or `|/-\`
+   - Auto-refresh at configurable interval
+
+3. **Implement live stats display**
+   ```go
+   type LiveDisplay struct {
+       lines    []string
+       mu       sync.Mutex
+       ticker   *time.Ticker
+   }
+
+   func NewLiveDisplay() *LiveDisplay
+   func (l *LiveDisplay) SetLine(index int, content string)
+   func (l *LiveDisplay) Start(refreshRate time.Duration)
+   func (l *LiveDisplay) Stop()
+   ```
+   - Clear and redraw on each update
+   - Handle terminal resize
+   - Use ANSI escape codes for cursor movement
+
+4. **Terminal control utilities**
+   ```go
+   func ClearLine()
+   func MoveCursorUp(n int)
+   func MoveCursorDown(n int)
+   func HideCursor()
+   func ShowCursor()
+   ```
+
+#### Tests to Write
+- Progress bar percentage calculation
+- ETA estimation accuracy
+- Spinner frame cycling
+- Live display line updates
+
+#### Deliverables
+- `gokit/cli/progress.go` with progress bar, spinner, and live display
+- `gokit/cli/progress_test.go` with unit tests
+
+---
+
+### Stage 0.4: Configuration Package (gokit/cli/config.go)
+
+**Goal:** Create config file loading and environment variable handling.
+
+#### Tasks
+
+1. **Implement config file loading**
+   ```go
+   type Config struct {
+       path   string
+       values map[string]interface{}
+   }
+
+   func LoadConfig(path string) (*Config, error)
+   func (c *Config) Get(key string) interface{}
+   func (c *Config) GetString(key string) string
+   func (c *Config) GetInt(key string) int
+   func (c *Config) GetDuration(key string) time.Duration
+   func (c *Config) GetBool(key string) bool
+   ```
+   - Support YAML format (using `gopkg.in/yaml.v3`)
+   - Support JSON format
+   - Auto-detect format from extension
+
+2. **Implement environment variable interpolation**
+   ```go
+   func ExpandEnv(value string) string
+   // Expands ${VAR} and $VAR patterns
+   // Example: "Bearer ${TOKEN}" → "Bearer abc123"
+   ```
+
+3. **Implement config file discovery**
+   ```go
+   func FindConfigFile(name string) (string, error)
+   // Search order:
+   // 1. Current directory: ./name.yaml, ./name.yml, ./name.json
+   // 2. XDG config: ~/.config/toolname/config.yaml
+   // 3. Home directory: ~/.toolname.yaml
+   ```
+
+4. **Add flag integration helpers**
+   ```go
+   func BindFlag(config *Config, key string, flagValue interface{})
+   // Allows config file values to provide defaults for CLI flags
+   ```
+
+#### Tests to Write
+- YAML config parsing
+- JSON config parsing
+- Environment variable expansion
+- Config file discovery in various locations
+- Flag binding
+
+#### Deliverables
+- `gokit/cli/config.go` with config loading and env expansion
+- `gokit/cli/config_test.go` with unit tests
+- Add dependency: `gopkg.in/yaml.v3`
+
+---
+
+### Stage 0.5: Statistics Package (gokit/stats/)
+
+**Goal:** Create thread-safe statistics collection utilities.
+
+#### Tasks
+
+1. **Implement histogram (gokit/stats/histogram.go)**
+   ```go
+   type Histogram struct {
+       mu     sync.Mutex
+       values []time.Duration
+       sorted bool
+   }
+
+   func NewHistogram() *Histogram
+   func (h *Histogram) Add(d time.Duration)
+   func (h *Histogram) Percentile(p float64) time.Duration  // p50, p95, p99
+   func (h *Histogram) Min() time.Duration
+   func (h *Histogram) Max() time.Duration
+   func (h *Histogram) Mean() time.Duration
+   func (h *Histogram) StdDev() time.Duration
+   func (h *Histogram) Count() int64
+   ```
+   - Sort values lazily for percentile calculations
+   - Consider memory-efficient bucketed histogram for high-volume data
+
+2. **Implement atomic counters (gokit/stats/counter.go)**
+   ```go
+   type Counter struct {
+       value int64  // Use atomic operations
+   }
+
+   func NewCounter() *Counter
+   func (c *Counter) Inc()
+   func (c *Counter) Add(n int64)
+   func (c *Counter) Value() int64
+   func (c *Counter) Reset() int64  // Returns value before reset
+
+   // CounterMap for tracking multiple named counters
+   type CounterMap struct {
+       mu       sync.RWMutex
+       counters map[string]*Counter
+   }
+
+   func NewCounterMap() *CounterMap
+   func (m *CounterMap) Inc(key string)
+   func (m *CounterMap) Get(key string) int64
+   func (m *CounterMap) All() map[string]int64
+   ```
+
+3. **Implement speed tracker (gokit/stats/speed.go)**
+   ```go
+   type SpeedTracker struct {
+       mu         sync.Mutex
+       samples    []speedSample
+       windowSize time.Duration  // Rolling window for calculation
+   }
+
+   type speedSample struct {
+       bytes     int64
+       timestamp time.Time
+   }
+
+   func NewSpeedTracker(windowSize time.Duration) *SpeedTracker
+   func (s *SpeedTracker) Add(bytes int64)
+   func (s *SpeedTracker) BytesPerSecond() float64
+   func (s *SpeedTracker) Format() string  // "12.4 MB/s"
+   ```
+   - Prune old samples outside window
+   - Handle edge cases (no samples, single sample)
+
+#### Tests to Write
+- Histogram percentile accuracy
+- Counter thread safety (concurrent increments)
+- Speed tracker calculation
+- Memory efficiency for large datasets
+
+#### Deliverables
+- `gokit/stats/histogram.go`
+- `gokit/stats/counter.go`
+- `gokit/stats/speed.go`
+- `gokit/stats/*_test.go` for each
+
+---
+
+### Stage 0.6: Worker Pool Package (gokit/pool/)
+
+**Goal:** Create a generic, reusable worker pool with graceful shutdown.
+
+#### Tasks
+
+1. **Implement generic worker pool**
+   ```go
+   type Pool[T any, R any] struct {
+       workers    int
+       jobs       chan T
+       results    chan R
+       workerFunc func(context.Context, T) R
+       wg         sync.WaitGroup
+   }
+
+   func New[T any, R any](workers int, fn func(context.Context, T) R) *Pool[T, R]
+   func (p *Pool[T, R]) Start(ctx context.Context)
+   func (p *Pool[T, R]) Submit(job T)
+   func (p *Pool[T, R]) Results() <-chan R
+   func (p *Pool[T, R]) Wait()
+   func (p *Pool[T, R]) Close()
+   ```
+
+2. **Add graceful shutdown**
+   - Respect context cancellation
+   - Drain jobs queue on shutdown
+   - Wait for in-flight work to complete
+
+3. **Add pool options**
+   ```go
+   type PoolOption func(*poolConfig)
+
+   func WithJobBuffer(size int) PoolOption
+   func WithResultBuffer(size int) PoolOption
+   func WithErrorHandler(fn func(error)) PoolOption
+   ```
+
+4. **Migrate existing blitz worker pool**
+   - Review current implementation in blitz
+   - Extract common patterns
+   - Ensure backward compatibility
+
+#### Tests to Write
+- Basic job submission and result collection
+- Context cancellation handling
+- Graceful shutdown with pending jobs
+- Concurrent safety
+
+#### Deliverables
+- `gokit/pool/pool.go`
+- `gokit/pool/pool_test.go`
+
+---
+
+### Stage 0.7: Network Utilities Package (gokit/netutil/)
+
+**Goal:** Create reusable network helper functions.
+
+#### Tasks
+
+1. **Implement DNS resolver utilities (gokit/netutil/resolver.go)**
+   ```go
+   func ResolveHost(ctx context.Context, host string) ([]net.IP, error)
+   func ResolveHostPreferIPv4(ctx context.Context, host string) (net.IP, error)
+   func IsIPv4(ip net.IP) bool
+   func IsIPv6(ip net.IP) bool
+   ```
+
+2. **Implement timeout helpers (gokit/netutil/timeout.go)**
+   ```go
+   type TimeoutConfig struct {
+       Connect time.Duration
+       Read    time.Duration
+       Write   time.Duration
+       Total   time.Duration
+   }
+
+   func DefaultTimeoutConfig() TimeoutConfig
+   func (tc TimeoutConfig) DialContext(ctx context.Context, network, addr string) (net.Conn, error)
+   ```
+
+3. **Implement URL utilities**
+   ```go
+   func ResolveURL(base, ref string) (string, error)  // Handle relative URLs
+   func ExtractHost(urlStr string) (string, error)
+   func NormalizeURL(urlStr string) (string, error)
+   ```
+
+#### Tests to Write
+- DNS resolution (may need mocking)
+- URL resolution with various base/ref combinations
+- Timeout behavior
+
+#### Deliverables
+- `gokit/netutil/resolver.go`
+- `gokit/netutil/timeout.go`
+- `gokit/netutil/*_test.go`
+
+---
+
+### Stage 0.8: Blitz Module Skeleton
+
+**Goal:** Set up the blitz module to use gokit packages.
+
+#### Tasks
+
+1. **Create main.go with flag parsing**
+   ```go
+   package main
+
+   import (
+       "flag"
+       "fmt"
+       "os"
+
+       "github.com/NickDiPreta/gokit/cli"
+   )
+
+   var (
+       numRequests = flag.Int("n", 100, "Number of requests")
+       concurrency = flag.Int("c", 10, "Concurrent workers")
+       url         = flag.String("url", "", "Target URL")
+   )
+
+   func main() {
+       flag.Parse()
+       if *url == "" {
+           fmt.Fprintln(os.Stderr, cli.Error("URL is required"))
+           os.Exit(1)
+       }
+       // Placeholder for load test logic
+   }
+   ```
+
+2. **Verify gokit imports work**
+   ```bash
+   cd blitz
+   go build .  # Should compile successfully
+   ```
+
+3. **Create placeholder structure for later phases**
+   ```
+   blitz/
+   ├── go.mod
+   ├── main.go
+   └── internal/
+       └── runner/
+           └── runner.go  # Placeholder for load test runner
+   ```
+
+#### Deliverables
+- Working `blitz` binary that uses gokit packages
+- Verified import paths work across workspace
+
+---
+
+### Stage 0.9: Testing and Documentation
+
+**Goal:** Ensure all packages have tests and basic documentation.
+
+#### Tasks
+
+1. **Run all tests**
+   ```bash
+   go test ./gokit/...
+   ```
+
+2. **Add package documentation**
+   - Each package should have a `doc.go` with package-level documentation
+   - Key exported types and functions should have doc comments
+
+3. **Create example usage**
+   ```go
+   // gokit/cli/example_test.go
+   func ExampleTable() {
+       t := cli.NewTable("Name", "Status", "Duration")
+       t.AddRow("Request 1", "OK", "45ms")
+       t.AddRow("Request 2", "Failed", "1.2s")
+       t.Render()
+   }
+   ```
+
+4. **Verify cross-module imports**
+   ```bash
+   # From blitz directory
+   go build .
+
+   # From root
+   go work sync
+   go build ./...
+   ```
+
+#### Deliverables
+- All tests passing
+- Package documentation in place
+- Example usage for key packages
+
+---
+
 ### Workspace Structure
 
 ```
@@ -99,18 +652,37 @@ import (
 |---------|---------|
 | `cli/output.go` | Table formatter, JSON output, colored text |
 | `cli/progress.go` | Progress bar, spinner, live updates |
+| `cli/config.go` | Config file loading, env expansion |
 | `stats/histogram.go` | Latency histograms, percentile calculation |
 | `stats/counter.go` | Thread-safe atomic counters |
+| `stats/speed.go` | Download speed tracking |
 | `pool/pool.go` | Generic worker pool (migrate existing code) |
+| `netutil/resolver.go` | DNS resolution helpers |
+| `netutil/timeout.go` | Timeout configuration helpers |
 
-### Concepts
+### Phase 0 Checklist
+
+- [ ] Stage 0.1: Go workspace initialized with all modules
+- [ ] Stage 0.2: CLI output package with colors, tables, JSON
+- [ ] Stage 0.3: Progress display with bar, spinner, live updates
+- [ ] Stage 0.4: Config loading with YAML/JSON and env expansion
+- [ ] Stage 0.5: Stats package with histogram, counters, speed tracker
+- [ ] Stage 0.6: Generic worker pool with graceful shutdown
+- [ ] Stage 0.7: Network utilities for DNS and timeouts
+- [ ] Stage 0.8: Blitz module skeleton using gokit
+- [ ] Stage 0.9: All tests passing, documentation complete
+
+### Concepts Covered
 
 - Go workspaces (`go.work`)
 - Multi-module repositories
-- `flag` or cobra patterns
+- `flag` package for CLI arguments
 - ANSI escape codes for colors/cursor control
-- `sync.Mutex` for thread-safe stats collection
+- `sync.Mutex` and `sync/atomic` for thread safety
 - `io.Writer` interfaces for flexible output
+- Go generics for reusable worker pool
+- Context cancellation patterns
+- YAML parsing with `gopkg.in/yaml.v3`
 
 ---
 

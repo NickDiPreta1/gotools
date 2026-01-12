@@ -13,13 +13,15 @@ func main() {
 	requests := flag.Int("requests", 50, "How many requests to send")
 	workers := flag.Int("workers", 10, "How many workers to use")
 	url := flag.String("url", "", "Target URL to stress test")
+	rate := flag.Int("rate", 0, "Set the maximum requests per second")
 
 	flag.Parse()
 
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 	}
-	jobsChan := make(chan struct{})
+
+	jobsChan := jobGenerator(*requests, *rate)
 	resultsChan := make(chan Result)
 
 	start := time.Now()
@@ -27,13 +29,6 @@ func main() {
 	for i := 0; i < *workers; i++ {
 		go worker(context.Background(), client, *url, jobsChan, resultsChan)
 	}
-
-	go func() {
-		for i := 0; i < *requests; i++ {
-			jobsChan <- struct{}{}
-		}
-		close(jobsChan)
-	}()
 
 	var results []Result
 	var errs int

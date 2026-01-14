@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"slices"
 	"time"
+
+	"github.com/NickDiPreta/gokit/cli"
 )
 
 func main() {
@@ -16,6 +18,12 @@ func main() {
 	rate := flag.Int("rate", 0, "Set the maximum requests per second")
 
 	flag.Parse()
+
+	if *url == "" {
+		fmt.Println(cli.Error("Error: URL is required"))
+		flag.Usage()
+		return
+	}
 
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -41,9 +49,10 @@ func main() {
 		results = append(results, res)
 		duration := time.Since(start)
 		rps := float64(i) / duration.Seconds()
-		fmt.Printf("Running: %d/%d | %.2f req/s | Errors: %d\r", i, *requests, rps, errs)
+		fmt.Printf("Running: %d/%d | %.2f req/s | Errors: %d\r",
+			i, *requests, rps, errs)
 	}
-	fmt.Printf("\rRunning: %d/%d | %.2f req/s | Errors: %d\n", *requests, float64(*requests)/time.Since(start).Seconds(), errs)
+	fmt.Println() // Clear the progress line
 
 	close(resultsChan)
 
@@ -65,12 +74,17 @@ func main() {
 
 	rps := float64(*requests) / duration.Seconds()
 
-	fmt.Printf("Requests:    %d\n", *requests)
-	fmt.Printf("Success:     %d\n", success)
-	fmt.Printf("Failed:      %d\n", failed)
-	fmt.Printf("Duration:    %s\n", duration.Round(time.Millisecond))
-	fmt.Printf("RPS:         %.2f\n", rps)
+	// Summary Section
+	fmt.Println("\n" + cli.Bold + "=== SUMMARY ===" + cli.Reset)
+	summaryTable := cli.NewTable("Metric", "Value")
+	summaryTable.AddRow("Total Requests", fmt.Sprintf("%d", *requests))
+	summaryTable.AddRow("Successful", cli.Success(fmt.Sprintf("%d", success)))
+	summaryTable.AddRow("Failed", cli.Error(fmt.Sprintf("%d", failed)))
+	summaryTable.AddRow("Duration", duration.Round(time.Millisecond).String())
+	summaryTable.AddRow("Requests/sec", fmt.Sprintf("%.2f", rps))
+	summaryTable.Render()
 
+	// Latency Section
 	if len(latencyList) > 0 {
 		slices.Sort(latencyList)
 		avgLatency := totalLatency / time.Duration(len(latencyList))
@@ -90,14 +104,18 @@ func main() {
 			p99Idx = len(latencyList) - 1
 		}
 
-		fmt.Printf("Latency:\n")
-		fmt.Printf("  Min:         %s\n", latencyList[0].Round(time.Millisecond))
-		fmt.Printf("  Avg:         %s\n", avgLatency.Round(time.Millisecond))
-		fmt.Printf("  P50:         %s\n", latencyList[p50Idx].Round(time.Millisecond))
-		fmt.Printf("  P95:         %s\n", latencyList[p95Idx].Round(time.Millisecond))
-		fmt.Printf("  P99:         %s\n", latencyList[p99Idx].Round(time.Millisecond))
-		fmt.Printf("  Max:         %s\n", latencyList[len(latencyList)-1].Round(time.Millisecond))
+		fmt.Println("\n" + cli.Bold + "=== LATENCY ===" + cli.Reset)
+		latencyTable := cli.NewTable("Percentile", "Duration")
+		latencyTable.AddRow("Min", latencyList[0].Round(time.Millisecond).String())
+		latencyTable.AddRow("Average", avgLatency.Round(time.Millisecond).String())
+		latencyTable.AddRow("P50 (Median)", latencyList[p50Idx].Round(time.Millisecond).String())
+		latencyTable.AddRow("P95", latencyList[p95Idx].Round(time.Millisecond).String())
+		latencyTable.AddRow("P99", latencyList[p99Idx].Round(time.Millisecond).String())
+		latencyTable.AddRow("Max", latencyList[len(latencyList)-1].Round(time.Millisecond).String())
+		latencyTable.Render()
 	} else {
-		fmt.Printf("Latency:     no successful requests\n")
+		fmt.Println("\n" + cli.Error("No successful requests"))
 	}
+
+	fmt.Println() // Final blank line for spacing
 }

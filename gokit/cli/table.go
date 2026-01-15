@@ -7,12 +7,16 @@ import (
 	"strings"
 )
 
+// Table represents a text-based table for CLI output.
+// It supports automatic column width calculation and customizable output.
 type Table struct {
-	Header []string
-	Rows   [][]string
-	Writer io.Writer
+	Header []string   // Column headers
+	Rows   [][]string // Table data rows
+	Writer io.Writer  // Output destination (defaults to os.Stdout)
 }
 
+// NewTable creates a new Table with the specified column headers.
+// The table defaults to writing to os.Stdout.
 func NewTable(headers ...string) *Table {
 	return &Table{
 		Header: headers,
@@ -21,10 +25,14 @@ func NewTable(headers ...string) *Table {
 	}
 }
 
+// AddRow appends a row of values to the table.
+// Values are matched to columns in order.
 func (t *Table) AddRow(values ...string) {
 	t.Rows = append(t.Rows, values)
 }
 
+// ColumnWidths calculates the maximum width needed for each column
+// based on header and cell content.
 func (t *Table) ColumnWidths() []int {
 	widths := make([]int, len(t.Header))
 
@@ -45,10 +53,13 @@ func (t *Table) ColumnWidths() []int {
 	return widths
 }
 
+// pad returns a string left-aligned and padded to the specified width.
 func pad(s string, width int) string {
 	return fmt.Sprintf("%-*s", width, s)
 }
 
+// Render outputs the table to the configured Writer.
+// The table includes headers, a separator line, and all data rows.
 func (t *Table) Render() {
 	widths := t.ColumnWidths()
 
